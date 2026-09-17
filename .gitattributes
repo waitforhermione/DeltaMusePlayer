@@ -1,0 +1,10 @@
+# 行尾：仓库内统一 LF，检出时不随平台改写。
+# 本项目只在 Windows 上开发，但源码是跨平台文本，统一 LF 可以避免
+# 「同一份文件在不同机器上 diff 全是行尾变化」这种噪音。
+* text=auto eol=lf
+
+# 二进制：不参与行尾转换与 diff。
+*.mid   binary
+*.png   binary
+*.exe   binary
+*.ico   binary

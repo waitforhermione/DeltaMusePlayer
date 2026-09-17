@@ -1,0 +1,97 @@
+== DeltaMuse Player · M1 acceptance preview ==
+
+[sample midi] %TEMP%\DeltaMusePlayerTests\fixture.mid
+
+== info ==
+文件：%TEMP%\DeltaMusePlayerTests\fixture.mid
+格式：MIDI format 0；每四分音符 480 tick
+时长：00:05.000
+声轨：1 条
+  * [0] Melody | — | 9 notes | 1.~4˙ | 5.00s
+
+== validate ==
+文件：%TEMP%\DeltaMusePlayerTests\fixture.mid
+轨：[0] Melody | — | 9 notes | 1.~4˙ | 5.00s
+音符：9；可演奏 9；不可演奏 0
+Playable: 100.0%
+用到的不同音高：8 个（1.~4˙）
+键位方案可演奏音域：1.~#1˙˙
+本命令只统计，不修改 MIDI 文件。
+
+== dump (event trace) ==
+文件：%TEMP%\DeltaMusePlayerTests\fixture.mid
+轨：[0] Melody | — | 9 notes | 1.~4˙ | 5.00s
+音符：9（源轨 9）
+映射：可演奏 9；不可演奏 0；Playable 100.0%
+音域：1.~4˙
+事件：24
+总时长：00:05.035（速度 1x）
+方案：delta_harmonica；降八度=mouse_left 升半音=mouse_middle 升八度=mouse_right
+时序：修饰键提前 15ms，修饰键延后释放 10ms，修饰键切换间隔 5ms，音间间隔 15ms，同键重触发 12ms，最短按住 30ms，重叠策略 Serialize，严格模式 关
+编译统计：音符 9（可演奏 9 / 不可演奏 0）；重叠顺延 0，同键重触发顺延 2，音间间隔顺延 5，最短按住补长 0，八度反向切换 2，最大顺延 36.0ms
+
+事件 trace（时间 / 输入 / 动作）：
+  00:00.000  Z DOWN  (note 0 C4)
+  00:00.500  Z UP  (note 0 C4)
+  00:00.515  Z DOWN  (note 1 C4)
+  00:01.000  Z UP  (note 1 C4)
+  00:01.015  C DOWN  (note 2 E4)
+  00:01.500  C UP  (note 2 E4)
+  00:01.515  B DOWN  (note 3 G4)
+  00:02.000  B UP  (note 3 G4)
+  00:02.500  , DOWN  (note 4 C5)
+  00:03.000  , UP  (note 4 C5)
+  00:03.016  MOUSE_MIDDLE DOWN  (note 5 C#5)
+  00:03.031  , DOWN  (note 5 C#5)
+  00:03.500  , UP  (note 5 C#5)
+  00:03.515  MOUSE_MIDDLE UP  (note 6 D5)
+  00:03.516  MOUSE_RIGHT DOWN  (note 6 D5)
+  00:03.531  X DOWN  (note 6 D5)
+  00:04.000  X UP  (note 6 D5)
+  00:04.021  MOUSE_LEFT DOWN  (note 7 C3)
+  00:04.036  Z DOWN  (note 7 C3)
+  00:04.500  Z UP  (note 7 C3)
+  00:04.510  MOUSE_LEFT UP  (note 8 F5)
+  00:04.536  V DOWN  (note 8 F5)
+  00:05.000  V UP  (note 8 F5)
+  00:05.035  MOUSE_RIGHT UP
+
+== simulate (fake clock, deterministic) ==
+文件：%TEMP%\DeltaMusePlayerTests\fixture.mid
+轨：[0] Melody | — | 9 notes | 1.~4˙ | 5.00s
+音符：9（源轨 9）
+映射：可演奏 9；不可演奏 0；Playable 100.0%
+音域：1.~4˙
+事件：24
+总时长：00:05.035（速度 1x）
+方案：delta_harmonica；降八度=mouse_left 升半音=mouse_middle 升八度=mouse_right
+时序：修饰键提前 15ms，修饰键延后释放 10ms，修饰键切换间隔 5ms，音间间隔 15ms，同键重触发 12ms，最短按住 30ms，重叠策略 Serialize，严格模式 关
+编译统计：音符 9（可演奏 9 / 不可演奏 0）；重叠顺延 0，同键重触发顺延 2，音间间隔顺延 5，最短按住补长 0，八度反向切换 2，最大顺延 36.0ms
+
+simulate：假时钟步长 3.7ms，共 24 条派发记录
+  00:00.000  Z            DOWN
+  00:00.503  Z            UP
+  00:00.517  Z            DOWN
+  00:01.002  Z            UP
+  00:01.017  C            DOWN
+  00:01.502  C            UP
+  00:01.517  B            DOWN
+  00:02.001  B            UP
+  00:02.501  ,            DOWN
+  00:03.000  ,            UP
+  00:03.019  MOUSE_MIDDLE DOWN
+  00:03.033  ,            DOWN
+  00:03.500  ,            UP
+  00:03.518  MOUSE_MIDDLE UP
+  00:03.518  MOUSE_RIGHT  DOWN
+  00:03.533  X            DOWN
+  00:04.003  X            UP
+  00:04.021  MOUSE_LEFT   DOWN
+  00:04.036  Z            DOWN
+  00:04.502  Z            UP
+  00:04.510  MOUSE_LEFT   UP
+  00:04.536  V            DOWN
+  00:05.002  V            UP
+  00:05.035  MOUSE_RIGHT  UP
+
+release-all 之后仍按着的输入：无（正确）

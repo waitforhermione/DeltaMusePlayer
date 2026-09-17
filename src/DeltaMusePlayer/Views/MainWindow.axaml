@@ -1,0 +1,182 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="DeltaMusePlayer.Views.MainWindow"
+        Title="DeltaMuse Player"
+        Width="1180" Height="820"
+        MinWidth="960" MinHeight="640"
+        WindowStartupLocation="CenterScreen">
+
+  <DockPanel Margin="12">
+
+    <!-- 顶部：模式提示条 -->
+    <Border DockPanel.Dock="Top" x:Name="ModeBanner" Background="#FFF4E5" BorderBrush="#F0C36D"
+            BorderThickness="1" CornerRadius="4" Padding="10,6" Margin="0,0,0,10">
+      <StackPanel>
+        <TextBlock x:Name="ModeBannerTitle" FontWeight="SemiBold"
+                   Text="Preview / Trace 模式：不会发送任何真实键鼠输入。" />
+        <TextBlock x:Name="ModeBannerDetail" TextWrapping="Wrap" FontSize="12" Foreground="#7A5C1E"
+                   Text="Preview 显示的 trace 就是 Real Input 会发出的那串输入；两者走同一份 PlaybackPlan 与同一个调度器，只有输入后端不同。" />
+      </StackPanel>
+    </Border>
+
+    <!-- 底部：状态栏 -->
+    <Border DockPanel.Dock="Bottom" BorderBrush="#DDDDDD" BorderThickness="0,1,0,0"
+            Padding="0,8,0,0" Margin="0,10,0,0">
+      <Grid ColumnDefinitions="Auto,*,Auto">
+        <TextBlock Grid.Column="0" Text="状态：" FontWeight="SemiBold" />
+        <TextBlock Grid.Column="1" Text="{Binding StatusText}" TextTrimming="CharacterEllipsis" />
+        <TextBlock Grid.Column="2" Text="{Binding ClockText}" FontFamily="Consolas,monospace" />
+      </Grid>
+    </Border>
+
+    <Grid ColumnDefinitions="380,*">
+
+      <!-- 左栏 -->
+      <ScrollViewer Grid.Column="0" Margin="0,0,12,0">
+        <StackPanel Spacing="10">
+
+          <TextBlock Text="MIDI 文件" FontWeight="SemiBold" />
+          <Grid ColumnDefinitions="*,Auto">
+            <TextBox Grid.Column="0" Text="{Binding MidiPath}" Watermark="选择 DeltaMuse 导出的 .mid" />
+            <Button Grid.Column="1" Content="浏览…" Margin="6,0,0,0" Click="OnBrowseMidi" />
+          </Grid>
+
+          <TextBlock Text="键位方案（InstrumentProfile）" FontWeight="SemiBold" />
+          <Grid ColumnDefinitions="*,Auto">
+            <TextBox Grid.Column="0" Text="{Binding ProfilePath}" Watermark="默认 profiles/delta_harmonica.json" />
+            <Button Grid.Column="1" Content="浏览…" Margin="6,0,0,0" Click="OnBrowseProfile" />
+          </Grid>
+
+          <TextBlock Text="声轨（Track）" FontWeight="SemiBold" />
+          <ListBox x:Name="TrackList" Height="110" SelectionChanged="OnTrackSelected" />
+
+          <TextBlock Text="{Binding SongSummary}" TextWrapping="Wrap" FontSize="12" />
+
+          <TextBlock Text="播放模式" FontWeight="SemiBold" />
+          <StackPanel>
+            <RadioButton x:Name="PreviewMode" GroupName="PlayMode"
+                         Content="Preview / Trace（不发送真实输入）" Checked="OnModeChanged" />
+            <RadioButton x:Name="RealInputMode" GroupName="PlayMode"
+                         Content="Real Input（发送真实键鼠事件）" Checked="OnModeChanged" />
+          </StackPanel>
+
+          <TextBlock Text="速度与倒计时" FontWeight="SemiBold" />
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <ComboBox x:Name="SpeedBox" Width="100" SelectionChanged="OnSpeedChanged">
+              <ComboBoxItem Content="0.5x" />
+              <ComboBoxItem Content="0.75x" />
+              <ComboBoxItem Content="1.0x" />
+              <ComboBoxItem Content="1.25x" />
+              <ComboBoxItem Content="1.5x" />
+            </ComboBox>
+            <TextBlock Text="倒计时" VerticalAlignment="Center" />
+            <ComboBox x:Name="CountdownBox" Width="84" SelectionChanged="OnCountdownChanged">
+              <ComboBoxItem Content="0 秒" />
+              <ComboBoxItem Content="1 秒" />
+              <ComboBoxItem Content="2 秒" />
+              <ComboBoxItem Content="3 秒" />
+              <ComboBoxItem Content="5 秒" />
+              <ComboBoxItem Content="10 秒" />
+            </ComboBox>
+          </StackPanel>
+
+          <TextBlock Text="输入时序档位" FontWeight="SemiBold" />
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <ComboBox x:Name="TimingBox" Width="220" SelectionChanged="OnTimingChanged">
+              <ComboBoxItem Content="默认（60fps 目标程序）" />
+              <ComboBoxItem Content="稳健（30fps / 掉帧机器）" />
+              <ComboBoxItem Content="紧凑（高帧率，余量最小）" />
+            </ComboBox>
+            <TextBlock x:Name="TimingDetail" FontSize="11" Foreground="#666" VerticalAlignment="Center" />
+          </StackPanel>
+
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <Button x:Name="PlayButton" Content="▶ 播放" Click="OnPlay" MinWidth="90" />
+            <Button x:Name="PauseButton" Content="⏸ 暂停" Click="OnPause" MinWidth="90" IsEnabled="False" />
+            <Button x:Name="StopButton" Content="⏹ 停止" Click="OnStop" MinWidth="90" IsEnabled="False" />
+          </StackPanel>
+
+          <Button x:Name="EmergencyButton" Content="紧急停止（F12）" Click="OnEmergencyStop"
+                  Background="#FFE0E0" HorizontalAlignment="Stretch" />
+
+          <TextBlock x:Name="CountdownText" FontSize="22" FontWeight="Bold" Foreground="#B00020"
+                     Text="" HorizontalAlignment="Center" />
+
+          <TextBlock Text="编译统计" FontWeight="SemiBold" />
+          <TextBlock Text="{Binding PlanSummary}" TextWrapping="Wrap" FontSize="12"
+                     FontFamily="Consolas,monospace" />
+
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <Button Content="导出 Trace (CSV)" Click="OnExportTrace" />
+            <Button Content="导出 plan (JSON)" Click="OnExportPlanJson" />
+          </StackPanel>
+
+          <TextBlock Text="可演奏性校验" FontWeight="SemiBold" />
+          <TextBlock Text="{Binding ValidateSummary}" TextWrapping="Wrap" FontSize="12" />
+
+          <TextBlock Text="不可演奏的音" FontWeight="SemiBold" />
+          <ListBox x:Name="UnplayableList" Height="90" FontSize="11" FontFamily="Consolas,monospace" />
+          <TextBlock x:Name="UnplayableSummary" Text="{Binding UnplayableSummaryText}" TextWrapping="Wrap" FontSize="11" Foreground="#8A4B00" />
+        </StackPanel>
+      </ScrollViewer>
+
+      <!-- 右栏 -->
+      <Grid Grid.Column="1" RowDefinitions="Auto,Auto,Auto,*,Auto">
+
+        <Border Grid.Row="0" Background="#F5F5F5" CornerRadius="4" Padding="10" Margin="0,0,0,8">
+          <Grid ColumnDefinitions="Auto,*,Auto">
+            <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="16">
+              <StackPanel>
+                <TextBlock Text="当前时间" FontSize="11" Foreground="#666" />
+                <TextBlock Text="{Binding ClockText}" FontSize="20" FontFamily="Consolas,monospace" />
+              </StackPanel>
+              <StackPanel>
+                <TextBlock Text="当前音" FontSize="11" Foreground="#666" />
+                <TextBlock Text="{Binding CurrentNoteText}" FontSize="20" FontFamily="Consolas,monospace" />
+              </StackPanel>
+              <StackPanel>
+                <TextBlock Text="映射为" FontSize="11" Foreground="#666" />
+                <TextBlock Text="{Binding CurrentBindingText}" FontSize="20" FontFamily="Consolas,monospace" />
+              </StackPanel>
+            </StackPanel>
+            <StackPanel Grid.Column="2" HorizontalAlignment="Right">
+              <TextBlock Text="当前按住的输入（后端记账）" FontSize="11" Foreground="#666" />
+              <TextBlock Text="{Binding HeldInputsText}" FontFamily="Consolas,monospace" />
+            </StackPanel>
+          </Grid>
+        </Border>
+
+        <Border Grid.Row="1" x:Name="RealInputBanner" Background="#FFD5D5" BorderBrush="#C00000"
+                BorderThickness="2" CornerRadius="4" Padding="10,6" Margin="0,0,0,8" IsVisible="False">
+          <StackPanel>
+            <TextBlock Text="REAL INPUT ACTIVE — 正在向系统发送真实键鼠事件" FontWeight="Bold"
+                       FontSize="15" Foreground="#8B0000" />
+            <TextBlock Text="按 F12 立即停止并释放全部输入。切到目标窗口后不要再点击本窗口。" FontSize="12" />
+          </StackPanel>
+        </Border>
+
+        <StackPanel Grid.Row="2" Spacing="4" Margin="0,0,0,8">
+          <ProgressBar x:Name="Progress" Minimum="0" Maximum="1" Value="{Binding ProgressValue}" Height="10" />
+          <TextBlock Text="{Binding NextNoteText}" FontSize="12" Foreground="#444" />
+          <TextBlock x:Name="TimingText" Text="{Binding TimingStatsText}" FontSize="12" Foreground="#006400" TextWrapping="Wrap" />
+          <TextBlock x:Name="PrivilegeHint" Text="{Binding PrivilegeHintText}" FontSize="12" Foreground="#8A4B00" TextWrapping="Wrap" />
+        </StackPanel>
+
+        <Grid Grid.Row="3" RowDefinitions="Auto,*,Auto">
+          <TextBlock Grid.Row="0" FontWeight="SemiBold"
+                     Text="事件 trace（Preview 显示计划；Real Input 显示后端实际收到的动作）" />
+          <TextBox Grid.Row="1" Text="{Binding TraceText}" IsReadOnly="True" AcceptsReturn="True"
+                   FontFamily="Consolas,monospace" FontSize="12" TextWrapping="NoWrap"
+                   VerticalContentAlignment="Top"
+                   ScrollViewer.VerticalScrollBarVisibility="Auto"
+                   ScrollViewer.HorizontalScrollBarVisibility="Auto" />
+          <TextBlock Grid.Row="2" Text="{Binding WarningText}" TextWrapping="Wrap" FontSize="12"
+                     Foreground="#8A4B00" Margin="0,6,0,0" />
+        </Grid>
+
+        <TextBlock Grid.Row="4" Text="{Binding BackendText}" FontSize="12" Foreground="#444"
+                   Margin="0,8,0,0" />
+      </Grid>
+    </Grid>
+  </DockPanel>
+</Window>
