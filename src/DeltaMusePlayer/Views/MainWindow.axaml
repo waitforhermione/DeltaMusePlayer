@@ -52,6 +52,24 @@
 
           <TextBlock Text="{Binding SongSummary}" TextWrapping="Wrap" FontSize="12" />
 
+          <TextBlock Text="演奏片段（不想弹全曲时用）" FontWeight="SemiBold" />
+          <Grid ColumnDefinitions="Auto,*,Auto,*,Auto">
+            <TextBlock Grid.Column="0" Text="从" VerticalAlignment="Center" Margin="0,0,4,0" />
+            <TextBox Grid.Column="1" x:Name="RangeStartBox" Text="{Binding RangeStartText}"
+                     TextChanged="OnRangeChanged" Watermark="mm:ss.mmm 或 秒" />
+            <TextBlock Grid.Column="2" Text="到" VerticalAlignment="Center" Margin="8,0,4,0" />
+            <TextBox Grid.Column="3" x:Name="RangeEndBox" Text="{Binding RangeEndText}"
+                     TextChanged="OnRangeChanged" Watermark="留空 = 到曲尾" />
+            <Button Grid.Column="4" Content="整曲" Margin="6,0,0,0" Click="OnRangeFull" />
+          </Grid>
+          <StackPanel Orientation="Horizontal" Spacing="6">
+            <Button Content="从当前位置" Click="OnRangeFromPosition" FontSize="11" />
+            <Button Content="前 30 秒" Click="OnRangeFirst30" FontSize="11" />
+            <Button Content="末 30 秒" Click="OnRangeLast30" FontSize="11" />
+            <Button Content="终点 +30 秒" Click="OnRangePlus30" FontSize="11" />
+          </StackPanel>
+          <TextBlock Text="{Binding RangeSummaryText}" TextWrapping="Wrap" FontSize="11" Foreground="#666" />
+
           <TextBlock Text="播放模式" FontWeight="SemiBold" />
           <StackPanel>
             <RadioButton x:Name="PreviewMode" GroupName="PlayMode"
@@ -96,7 +114,7 @@
             <Button x:Name="StopButton" Content="⏹ 停止" Click="OnStop" MinWidth="90" IsEnabled="False" />
           </StackPanel>
 
-          <Button x:Name="EmergencyButton" Content="紧急停止（F12）" Click="OnEmergencyStop"
+          <Button x:Name="EmergencyButton" Content="紧急停止（F9）" Click="OnEmergencyStop"
                   Background="#FFE0E0" HorizontalAlignment="Stretch" />
 
           <TextBlock x:Name="CountdownText" FontSize="22" FontWeight="Bold" Foreground="#B00020"
@@ -151,7 +169,7 @@
           <StackPanel>
             <TextBlock Text="REAL INPUT ACTIVE — 正在向系统发送真实键鼠事件" FontWeight="Bold"
                        FontSize="15" Foreground="#8B0000" />
-            <TextBlock Text="按 F12 立即停止并释放全部输入。切到目标窗口后不要再点击本窗口。" FontSize="12" />
+            <TextBlock Text="{Binding EmergencyHintText}" FontSize="12" TextWrapping="Wrap" />
           </StackPanel>
         </Border>
 

@@ -47,6 +47,22 @@ public sealed class PlaybackPlanner
         double speedSafe = speed;
 
         var list = notes.ToList();
+
+        // 片段范围先于其它一切：只在选中的那一段上做映射与时间规整。
+        // 顺序很重要 —— 先裁剪再剪前导静音，否则「前导静音」会被当成整曲的前导，
+        // 而不是所选片段的前导。
+        var range = ExtractRange(list, _config.RangeStartMs, _config.RangeEndMs);
+        list = range.Notes;
+
+        // 两种「空」要分开对待：
+        //   * 源轨本来就是空的、也没选片段 → 照旧产出一份空计划（这是合法状态，不是错误）。
+        //   * 使用者选了片段、而这一段里一个音都没有 → 明确报错，否则会得到一份「看着成功、
+        //     其实什么都不弹」的计划，正是最难查的那种失败。
+        if (list.Count == 0 && _config.HasRange)
+            throw new InvalidOperationException(
+                $"所选片段里没有任何音符（{Music.TimeLabel(range.StartMs)} ~ {Music.TimeLabel(range.EndMs)}）。" +
+                "请把片段范围调大，或换成整曲。");
+
         if (_config.TrimLeadingSilence && list.Count > 0)
             list = TrimLeadingSilence(list);
 
@@ -385,7 +401,94 @@ public sealed class PlaybackPlanner
     {
         double first = notes.Min(n => n.StartSeconds);
         if (first <= 0.0005) return notes;
-        return notes.Select(n => n with { StartSeconds = Math.Max(0, n.StartSeconds - first) }).ToList();
+        return notes
+            .Select(n => n with { StartSeconds = Math.Max(0, n.StartSeconds - first) })
+            .ToList();
+    }
+
+    // ---------------------------------------------------------------- 片段范围
+
+    private readonly record struct RangeWindow(
+        List<PlaybackNote> Notes,
+        double StartMs,
+        double EndMs,
+        double NaturalLastEndMs,
+        int TotalInSource);
+
+    /// <summary>
+    /// 截取片段。语义：
+    ///   * 起点**含**：起点那一瞬间起音的音符算在内。
+    ///   * 终点**不含**：终点那一瞬间起音的音符算在下一段 —— 这样把一首曲子
+    ///     切成 [0,X) 与 [X,尾] 两段时不会漏音也不会重音。
+    ///   * **跨越终点的长音会被截断在终点**。口琴是单音乐器，正在吹的音必须在
+    ///     终点松开，否则残留的按键会漏到片段之外。
+    ///
+    /// 音符的时间保持**原始音乐时间不变**（不平移到 0）：这样界面上的位置读数
+    /// 仍然对应源文件的时间轴，使用者对着谱子或编辑器能直接对上号。
+    /// 前导静音由 <see cref="TrimLeadingSilence"/> 负责，两者互不干扰。
+    /// </summary>
+    private static RangeWindow ExtractRange(List<PlaybackNote> notes, double? startMs, double? endMs)
+    {
+        if (notes.Count == 0) return new RangeWindow(notes, startMs ?? 0, endMs ?? 0, 0, 0);
+
+        double srcFirst = notes.Min(n => n.StartSeconds) * 1000.0;
+        double srcLast = notes.Max(n => n.EndSeconds) * 1000.0;
+
+        double from = startMs ?? srcFirst;
+        double to = endMs ?? srcLast;
+
+        const double Eps = 0.0005;   // 0.5µs：只是浮点噪声容差，不是可感知的裁剪
+
+        if (startMs is null && endMs is null)
+            return new RangeWindow(notes, from, to, srcLast, notes.Count);
+
+        var kept = new List<PlaybackNote>(notes.Count);
+        double naturalLastEnd = 0;
+        foreach (var n in notes)
+        {
+            double s = n.StartSeconds * 1000.0;
+            double e = n.EndSeconds * 1000.0;
+
+            if (s < from - Eps) continue;      // 起点之前起音：整颗丢掉
+            if (s >= to - Eps) continue;       // 终点及之后起音：属于下一段
+
+            // 记下**未截断**的自然结束时刻：界面要报「这段音乐到哪儿结束」，
+            // 报截断后的边界（可能等于终点）会是个编出来的数字。
+            if (e > naturalLastEnd) naturalLastEnd = e;
+
+            var keptNote = n;
+            if (e > to)
+            {
+                // 截断在终点。EndSeconds 是 StartSeconds + DurationSeconds 算出来的，
+                // 所以这里是改时长而不是改终点。截断后短于容差就丢掉，
+                // 绝不允许产生零时长音符（会变成按下即抬起）。
+                double clippedSec = (to - s) / 1000.0;
+                if (clippedSec <= Eps) continue;
+                keptNote = n with { DurationSeconds = clippedSec };
+            }
+            kept.Add(keptNote);
+        }
+
+        return new RangeWindow(kept, from, to, naturalLastEnd, notes.Count);
+    }
+
+    /// <summary>
+    /// 片段预览：给定范围数一数会弹几个音、并给出这一段**音乐**的实际覆盖范围。
+    /// 界面用它显示「这一段有几个音」，CLI 用它给出同样的反馈。
+    ///
+    /// 返回的 <c>LastNoteMs</c> 是被保留音符的**自然结束时刻**，不是截断后的边界 ——
+    /// 报截断边界会得到一个编出来的数字（比如终点 2050，但最后一个音其实 1900 就结束了）。
+    /// 末尾那个跨越终点的长音在真正播放时会被截断在终点，这一点由 <see cref="Compile"/> 负责。
+    /// </summary>
+    public static (int NoteCount, double FirstNoteMs, double LastNoteMs) DescribeRange(
+        IEnumerable<PlaybackNote> notes, double? startMs, double? endMs)
+    {
+        var all = notes.ToList();
+        var w = ExtractRange(all, startMs, endMs);
+        if (w.Notes.Count == 0) return (0, 0, 0);
+        return (w.Notes.Count,
+                w.Notes.Min(n => n.StartSeconds) * 1000.0,
+                w.NaturalLastEndMs);
     }
 
     private static int CountOverlaps(List<PlaybackNote> notes)

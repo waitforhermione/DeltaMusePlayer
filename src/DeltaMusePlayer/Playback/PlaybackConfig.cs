@@ -6,9 +6,12 @@ using DeltaMusePlayer.Core;
 /// 时序与按键策略配置。**所有**毫秒数值都在这里，不许散落到调度或计划代码里。
 ///
 /// 口径（重要）：
-///   本类里的毫秒全部是**播放墙钟毫秒**，即真实物理时间。
+///   本类里的毫秒**绝大部分**是**播放墙钟毫秒**，即真实物理时间。
 ///   计划内部的音符时间是**音乐毫秒**（MidiParser 给出的秒 × 1000）。
 ///   编译计划时按 speed 把物理毫秒折算成音乐毫秒，所以边沿间隔不会被速度压缩。
+///
+///   唯一的例外是 <see cref="RangeStartMs"/> / <see cref="RangeEndMs"/>：
+///   它们是**音乐时间**（源文件的秒数），描述「弹哪一段」，与速度无关。
 /// </summary>
 public sealed class PlaybackConfig
 {
@@ -50,6 +53,22 @@ public sealed class PlaybackConfig
 
     /// <summary>是否把前导静音剪掉，让旋律从 0 秒开始。</summary>
     public bool TrimLeadingSilence { get; set; } = true;
+
+    // ---------------------------------------------------------------- 片段范围
+    //
+    // 这两个是**音乐时间**（源文件的秒数），不是物理毫秒 —— 它们描述「弹曲子的哪一段」，
+    // 与速度无关，也和上面那批物理预算不是一类东西，所以单独放一段。
+    //
+    // 两个都是 null 表示整曲。只设 Start 表示「从这儿到结尾」，只设 End 表示「从头到这儿」。
+
+    /// <summary>片段起点（音乐毫秒，含）。null = 从曲首开始。</summary>
+    public double? RangeStartMs { get; set; }
+
+    /// <summary>片段终点（音乐毫秒，含）。null = 到曲尾结束。跨越终点的长音会被截断在终点。</summary>
+    public double? RangeEndMs { get; set; }
+
+    /// <summary>是否设置了片段范围。</summary>
+    public bool HasRange => RangeStartMs is not null || RangeEndMs is not null;
 
     /// <summary>真实输入播放前的倒计时秒数（0 = 不倒计时）。</summary>
     public double CountdownSeconds { get; set; } = 3.0;
@@ -100,13 +119,24 @@ public sealed class PlaybackConfig
         if (MinimumKeyHoldMs <= 0)
             throw new ArgumentOutOfRangeException(nameof(MinimumKeyHoldMs), "最短按住必须大于 0：不允许零时长按键。");
         if (FinishReleaseDelayMs < 0) throw new ArgumentOutOfRangeException(nameof(FinishReleaseDelayMs));
+        if (RangeStartMs is { } rs && rs < 0)
+            throw new ArgumentOutOfRangeException(nameof(RangeStartMs), "片段起点不能是负数。");
+        if (RangeEndMs is { } re && re < 0)
+            throw new ArgumentOutOfRangeException(nameof(RangeEndMs), "片段终点不能是负数。");
+        if (RangeStartMs is { } s && RangeEndMs is { } e && e <= s)
+            throw new ArgumentOutOfRangeException(nameof(RangeEndMs),
+                $"片段终点必须晚于起点（起点 {s:F0}ms，终点 {e:F0}ms）。");
     }
 
     public string Describe()
         => $"修饰键提前 {ModifierLeadMs:F0}ms，修饰键延后释放 {ModifierReleaseDelayMs:F0}ms，" +
            $"修饰键切换间隔 {ModifierTransitionGapMs:F0}ms，音间间隔 {ReleaseGapMs:F0}ms，" +
            $"同键重触发 {SameKeyRetriggerGapMs:F0}ms，最短按住 {MinimumKeyHoldMs:F0}ms，" +
-           $"重叠策略 {Overlap}，严格模式 {(Strict ? "开" : "关")}";
+           $"重叠策略 {Overlap}，严格模式 {(Strict ? "开" : "关")}" +
+           (HasRange
+               ? $"，片段 {(RangeStartMs is { } s ? Music.TimeLabel(s) : "00:00.000")} ~ " +
+                 $"{(RangeEndMs is { } e ? Music.TimeLabel(e) : "曲尾")}"
+               : "");
 }
 
 /// <summary>重叠音符的处理策略。</summary>

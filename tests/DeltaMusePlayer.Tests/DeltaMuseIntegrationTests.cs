@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text.RegularExpressions;
 using DeltaMusePlayer.Cli;
 using DeltaMusePlayer.Core;
 using DeltaMusePlayer.Input;
@@ -279,8 +281,81 @@ public sealed class DeltaMuseIntegrationTests
     }
 
     [Fact]
-    public void CliValidateReportsPlayablePercentWithoutChangingTheFile()
+    public void CliRangePlaysOnlyTheSelectedSegment()
     {
+        string path = WriteDeltaMuseStyleMelody();
+
+        string Dump(params string[] extra)
+        {
+            var stdout = new StringWriter();
+            var args = new List<string> { "dump", path };
+            args.AddRange(extra);
+            int code = CliRunner.Run(args.ToArray(), stdout, new StringWriter());
+            Assert.Equal(0, code);
+            return stdout.ToString();
+        }
+
+        string full = Dump();
+        string ranged = Dump("--range", "1-3");
+
+        // 片段必须真的更短：事件数与总时长都要下降。
+        Assert.Contains("片段 00:01.000 ~ 00:03.000", ranged);
+        Assert.DoesNotContain("片段", full);
+
+        int Events(string s)
+        {
+            var m = Regex.Match(s, @"事件：(\d+)");
+            Assert.True(m.Success, "输出里应当有「事件：N」");
+            return int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
+        }
+
+        Assert.True(Events(ranged) < Events(full),
+            $"选中一段之后事件数应当减少（整曲 {Events(full)}，片段 {Events(ranged)}）");
+    }
+
+    [Fact]
+    public void CliRangeWithNoNotesInItFailsClearly()
+    {
+        string path = WriteDeltaMuseStyleMelody();
+        var stdout = new StringWriter();
+        var stderr = new StringWriter();
+
+        // 选一段完全没有音符的区间：必须明确失败，而不是安静地给出一份空计划。
+        int code = CliRunner.Run(new[] { "dump", path, "--range", "600-700" }, stdout, stderr);
+
+        Assert.Equal(3, code);                       // 3 = 编译期拒绝
+        Assert.Contains("没有任何音符", stderr.ToString());
+    }
+
+    [Fact]
+    public void CliRejectsGarbageRange()
+    {
+        string path = WriteDeltaMuseStyleMelody();
+        var stderr = new StringWriter();
+
+        int code = CliRunner.Run(new[] { "dump", path, "--range", "abc-def" }, new StringWriter(), stderr);
+
+        Assert.Equal(1, code);                       // 1 = 参数错误
+        Assert.Contains("--range", stderr.ToString());
+    }
+
+    [Fact]
+    public void CliRejectsInvertedRangeAsAParameterError()
+    {
+        // 终点早于起点是**参数**问题，必须干净地报「参数错误」并返回 1。
+        // 曾经它会一路抛到 Main 外面变成未处理异常：屏幕上是一坨堆栈，退出码是 -1。
+        string path = WriteDeltaMuseStyleMelody();
+        var stderr = new StringWriter();
+
+        int code = CliRunner.Run(new[] { "dump", path, "--range", "5-2" }, new StringWriter(), stderr);
+
+        Assert.Equal(1, code);
+        Assert.Contains("参数错误", stderr.ToString());
+        Assert.Contains("必须晚于起点", stderr.ToString());
+    }
+
+    [Fact]
+    public void CliValidateReportsPlayablePercentWithoutChangingTheFile()    {
         string path = WriteDeltaMuseStyleMelody();
         byte[] before = File.ReadAllBytes(path);
 

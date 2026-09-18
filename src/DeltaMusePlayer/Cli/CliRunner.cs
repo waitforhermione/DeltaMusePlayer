@@ -27,6 +27,9 @@ public static class CliRunner
           DeltaMusePlayer simulate <midi> [选项]            用假时钟跑一遍调度，校验时序与 release-all
           DeltaMusePlayer profiles                          列出键位方案
           DeltaMusePlayer keymap   [选项]                   逻辑键 → VK → 扫描码 对照表（不发任何输入）
+          DeltaMusePlayer hotkey   [--wait <秒>]            全局紧急停止热键自检：注册真实系统热键，
+                                                            等你真的按一下（合成按键无法触发系统热键，
+                                                            所以这一项只能由真人验证）
           DeltaMusePlayer dryrun   [选项]                   打印「真实输入将会发出的 Win32 调用」（不发任何输入）
           DeltaMusePlayer send     [选项]                   真实发送！Notepad 验收用的极短序列
 
@@ -37,6 +40,9 @@ public static class CliRunner
           --limit <n>       只打印前 n 条事件（默认全部）
           --strict          严格模式：有弹不出来的音就拒绝编译
           --no-trim         保留开头静音，不把旋律平移到 0 秒
+          --range <a-b>     只弹这一段：起点-终点，如 0:30-1:15 或 30-75（秒）。
+                            起点含、终点不含；跨越终点的长音截断在终点。
+                            终点可省略表示到曲尾（--range 0:30-）。留空/不写 = 整曲。
           --overlap <p>     重叠策略：serialize（默认）| truncate
           --timing <p>      时序档位：default | safe | aggressive
           --countdown <s>   真实发送前的倒计时秒数（默认 3，send 用）
@@ -88,6 +94,14 @@ public static class CliRunner
             return 0;
         }
 
+        // 全局热键自检：注册真实系统热键，等使用者真的按一下。
+        // 必须由真人按键才算通过 —— 合成按键（SendInput）不会触发 RegisterHotKey 注册的热键，
+        // 所以这个功能**无法**自测。
+        if (command == "hotkey")
+        {
+            return HotkeySelfTest(stdout, stderr, opts);
+        }
+
         // 不需要 MIDI 文件的命令：键位对照表、真实输入预演、真实发送自检序列。
         if (command is "keymap" or "dryrun" or "send")
         {
@@ -130,7 +144,20 @@ public static class CliRunner
 
         var log = new AppLog();
         var session = new NoteSession(log);
-        session.Config = opts.BuildConfig();
+
+        // 配置校验必须和「参数解析」归同一类错误。
+        // 校验失败的典型来源就是参数本身（例如 --range 5-2 是终点早于起点），
+        // 如果让它落到下面读文件的那个 try 里，就会变成一句莫名其妙的「文件有问题」，
+        // 甚至直接抛到 Main 外面变成未处理异常。
+        try
+        {
+            session.Config = opts.BuildConfig();
+        }
+        catch (Exception ex)
+        {
+            stderr.WriteLine($"参数错误：{ex.Message}");
+            return 1;
+        }
 
         try
         {
@@ -182,6 +209,72 @@ public static class CliRunner
     }
 
     // ------------------------------------------------------------------ 子命令
+
+    /// <summary>
+    /// 全局紧急停止热键自检。
+    ///
+    /// 为什么要做成一条命令而不是靠单测：合成按键（<c>SendInput</c>）**不会**触发
+    /// <c>RegisterHotKey</c> 注册的系统热键，所以这件事在自动化测试里根本测不了 ——
+    /// 只能由真人按一下真的键盘。与其含糊过去，不如给使用者一条 10 秒就能验完的命令。
+    /// </summary>
+    private static int HotkeySelfTest(TextWriter stdout, TextWriter stderr, Options opts)
+    {
+        int seconds = opts.HotkeyWaitSeconds;
+        stdout.WriteLine("全局紧急停止热键自检");
+        stdout.WriteLine("说明：这条命令会注册一个**真实的系统热键**，然后等你按一下键盘。");
+        stdout.WriteLine("      它不发送任何键鼠事件；只是注册热键并等待。");
+        stdout.WriteLine();
+
+        using var api = new WindowsGlobalHotkeyApi();
+        if (!api.IsSupported)
+        {
+            stderr.WriteLine("当前平台不支持系统级热键注册。");
+            return 2;
+        }
+
+        using var fired = new ManualResetEventSlim(false);
+        using var hotkey = new EmergencyHotkey(api, () => fired.Set());
+        hotkey.Start();
+
+        if (!hotkey.IsActive)
+        {
+            stderr.WriteLine($"注册失败：{hotkey.FailureReason}");
+            stderr.WriteLine("（组合键可能已被别的程序占用。程序在运行时会把界面提示改成");
+            stderr.WriteLine("  「仅本窗口有效」，不会假装热键可用。）");
+            return 4;
+        }
+
+        stdout.WriteLine($"已注册：{hotkey.Label}（系统级热键，非键盘钩子）");
+        stdout.WriteLine($"请在 {seconds} 秒内按一下 {hotkey.Label}。");
+        stdout.WriteLine();
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        int lastShown = -1;
+        bool ok = false;
+        while (sw.Elapsed.TotalSeconds < seconds)
+        {
+            if (fired.IsSet) { ok = true; break; }
+            int remain = seconds - (int)sw.Elapsed.TotalSeconds;
+            if (remain != lastShown)
+            {
+                lastShown = remain;
+                stdout.WriteLine($"  ...还剩 {remain} 秒");
+            }
+            fired.Wait(TimeSpan.FromMilliseconds(100));
+        }
+
+        stdout.WriteLine();
+        if (ok)
+        {
+            stdout.WriteLine($"通过：{hotkey.Label} 真的触发了。");
+            stdout.WriteLine("这意味着切到别的窗口（包括游戏）之后，这个键依然是你的保险丝。");
+            return 0;
+        }
+
+        stdout.WriteLine($"未检测到按键。{hotkey.Label} 没有被触发。");
+        stdout.WriteLine("可能原因：按键被别的程序抢走、键盘布局问题、或本会话无法投递系统热键。");
+        return 4;
+    }
 
     private static void PrintProfiles(TextWriter w)
     {
@@ -496,6 +589,15 @@ public static class CliRunner
         public bool WithOctave { get; private set; }
         public bool TestMouse { get; private set; }
 
+        /// <summary>演奏片段起点（音乐毫秒）；null = 曲首。与 GUI 的「演奏片段」是同一套语义。</summary>
+        public double? RangeStartMs { get; private set; }
+
+        /// <summary>演奏片段终点（音乐毫秒）；null = 曲尾。</summary>
+        public double? RangeEndMs { get; private set; }
+
+        /// <summary>`hotkey` 自检等待真人按键的秒数。</summary>
+        public int HotkeyWaitSeconds { get; private set; } = 10;
+
         public void Parse(IEnumerable<string> args)
         {
             var list = args.ToList();
@@ -539,6 +641,20 @@ public static class CliRunner
                         break;
                     case "--with-octave": WithOctave = true; break;
                     case "--test-mouse": TestMouse = true; break;
+                    case "--wait":
+                        HotkeyWaitSeconds = Math.Clamp(int.Parse(Need(a), CultureInfo.InvariantCulture), 1, 120);
+                        break;
+                    case "--range":
+                        {
+                            string raw = Need(a);
+                            if (!TimeInput.TryParseRange(raw, out double? rs, out double? re))
+                                throw new ArgumentException(
+                                    $"--range 看不懂：\"{raw}\"。写法是 起点-终点，例如 0:30-1:15、" +
+                                    "30-75（秒），终点可省略表示到曲尾（0:30-）。");
+                            RangeStartMs = rs;
+                            RangeEndMs = re;
+                            break;
+                        }
                     default:
                         if (a.StartsWith('-')) throw new ArgumentException($"未知选项：{a}");
                         if (MidiPath is not null) throw new ArgumentException($"给了多个 MIDI 路径：{MidiPath} 与 {a}");
@@ -564,6 +680,8 @@ public static class CliRunner
             config.Strict = Strict;
             config.TrimLeadingSilence = !NoTrim;
             config.Overlap = Overlap;
+            config.RangeStartMs = RangeStartMs;
+            config.RangeEndMs = RangeEndMs;
             config.Validate();
             return config;
         }

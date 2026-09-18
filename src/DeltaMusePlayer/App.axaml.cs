@@ -33,7 +33,11 @@ public sealed class App : Application
             }
 
             // 关闭窗口时尽最大努力释放所有本程序按下的输入（进程退出前的最后一道保险）。
-            desktop.ShutdownRequested += (_, _) => window.EmergencyStop();
+            desktop.ShutdownRequested += (_, _) =>
+            {
+                window.EmergencyStop();
+                window.DisposeEmergencyHotkey();
+            };
         }
 
         base.OnFrameworkInitializationCompleted();

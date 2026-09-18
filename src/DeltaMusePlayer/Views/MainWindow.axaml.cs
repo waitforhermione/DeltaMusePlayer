@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text;
 using Avalonia.Controls;
@@ -8,6 +9,7 @@ using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using DeltaMusePlayer.Core;
 using DeltaMusePlayer.Input;
+using DeltaMusePlayer.Input.Win32;
 using DeltaMusePlayer.Playback;
 using DeltaMusePlayer.Profiles;
 
@@ -21,7 +23,7 @@ namespace DeltaMusePlayer.Views;
 ///   * 本次运行第一次切到 Real Input 时弹一次风险确认，确认后本次会话不再弹。
 ///   * Real Input 播放在倒计时结束后才真正开始，position=0 从那一刻算起。
 ///   * 播放中显示醒目但不闪烁的 REAL INPUT ACTIVE 状态。
-///   * F12 / 紧急停止按钮 / 关窗：一律 stop + release-all。
+///   * F9 / 紧急停止按钮 / 关窗：一律 stop + release-all。
 ///
 /// 两种模式共用同一份 <see cref="PlaybackPlan"/> 与同一个 <see cref="PlaybackEngine"/>，
 /// 差别只有注入时用的 <see cref="IInputBackend"/>。
@@ -43,6 +45,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private readonly DispatchTimingStats _timingStats = new();
     private SchedulerLog? _schedulerLog;
+    private EmergencyHotkey? _emergencyHotkey;
     private bool _realInputConsentGiven;
     private bool _isRealInputActive;
 
@@ -72,7 +75,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _uiTimer.Start();
 
         KeyDown += OnKeyDown;
-        Closing += (_, _) => EmergencyStop();
+        Closing += (_, _) =>
+        {
+            EmergencyStop();
+            DisposeEmergencyHotkey();   // 关窗才归还这个系统组合键
+        };
+        StartEmergencyHotkey();
 
         StatusText = "就绪。默认 Preview / Trace 模式：不会发送任何真实输入。";
         WarningText = "";
@@ -221,7 +229,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             : "Preview / Trace 模式：不会发送任何真实键鼠输入。";
         ModeBannerDetail.Text = real
             ? "Automation in online games may violate game rules or result in account penalties. " +
-              "按播放后有倒计时，请在它结束前切到目标窗口；按 F12 可立即停止并释放全部输入。"
+              "按播放后有倒计时，请在它结束前切到目标窗口；按 F9 可立即停止并释放全部输入。"
             : "Preview 显示的 trace 就是 Real Input 会发出的那串输入；两者走同一份 PlaybackPlan 与同一个调度器，只有输入后端不同。";
 
         BackendText = real
@@ -289,6 +297,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         try
         {
             var song = _session.LoadMidi(path);
+            // 换文件就重置选段：上一个文件的 mm:ss 片段套到新文件上毫无意义。
+            ResetRangeToWholeSong();
             TrackList.ItemsSource = song.Tracks.Select(t => t.Describe()).ToList();
             TrackList.SelectedIndex = song.SuggestMelodyTrack()?.Index ?? -1;
             SongSummary =
@@ -328,6 +338,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             _ => PlaybackConfig.Default,
         };
         preset.CountdownSeconds = CurrentCountdown;
+        // 片段范围是使用者的选择，不是档位的一部分：切档位不能把手选的片段重置掉。
+        var previous = _session.Config;
+        preset.RangeStartMs = previous?.RangeStartMs;
+        preset.RangeEndMs = previous?.RangeEndMs;
         _session.Config = preset;
         TimingDetail.Text =
             $"修饰键提前 {preset.ModifierLeadMs:F0}ms / 最短按住 {preset.MinimumKeyHoldMs:F0}ms / " +
@@ -348,6 +362,124 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         if (MidiPath.Length == 0) return;
         RebuildPlan();
+    }
+
+    // ---------------------------------------------------------------- 演奏片段
+
+    private string _rangeStartText = "";
+    private string _rangeEndText = "";
+    private string _rangeSummaryText = "";
+
+    public string RangeStartText { get => _rangeStartText; set { _rangeStartText = value; Raise(); } }
+
+    public string RangeEndText { get => _rangeEndText; set { _rangeEndText = value; Raise(); } }
+
+    /// <summary>片段的一句话预览；范围非法时显示原因，而不是留一个静默的失败。</summary>
+    public string RangeSummaryText { get => _rangeSummaryText; set { _rangeSummaryText = value; Raise(); } }
+
+    /// <summary>载入文件后把选段重置为整曲，避免上一个文件的片段范围串到新文件上。</summary>
+    private void ResetRangeToWholeSong()
+    {
+        // 先把配置清干净再动文本框：如果两个框本来就是空的，TextChanged 不会触发，
+        // 光清文本框会把上一份文件的 RangeStartMs/RangeEndMs 留在 Config 里。
+        _session.Config.RangeStartMs = null;
+        _session.Config.RangeEndMs = null;
+        RangeStartText = "";
+        RangeEndText = "";
+        RangeSummaryText = "整曲。要只弹一段就填起止时间。";
+    }
+
+    private void OnRangeChanged(object? sender, TextChangedEventArgs e)
+    {
+        if (_session.SelectedTrack is null)
+        {
+            RangeSummaryText = "";
+            return;
+        }
+
+        string startRaw = (RangeStartBox.Text ?? "").Trim();
+        string endRaw = (RangeEndBox.Text ?? "").Trim();
+
+        // 范围不合法时**提前返回**，让上一份可用计划留在引擎里：
+        // 使用者在输入框里一边打字一边触发重建，不能让半截输入把计划清空。
+        if (!TryParseUserTime(startRaw, out double? start))
+        {
+            RangeSummaryText = $"! 起点看不懂：\"{startRaw}\"。可以写 mm:ss.mmm（如 01:23.500）、1:23 或直接写秒数。";
+            return;
+        }
+        if (!TryParseUserTime(endRaw, out double? end))
+        {
+            RangeSummaryText = $"! 终点看不懂：\"{endRaw}\"。可以写 mm:ss.mmm、1:23 或直接写秒数；留空表示到曲尾。";
+            return;
+        }
+        if (start is { } s && end is { } en && en <= s)
+        {
+            RangeSummaryText = $"! 终点（{Music.TimeLabel(en)}）必须晚于起点（{Music.TimeLabel(s)}）。";
+            return;
+        }
+
+        var (count, first, last) = PlaybackPlanner.DescribeRange(_session.SelectedTrack.Notes, start, end);
+        if (count == 0)
+        {
+            RangeSummaryText = "! 这一段里没有任何音符，播放会直接报错。换个大一点的范围。";
+            return;
+        }
+
+        _session.Config.RangeStartMs = start;
+        _session.Config.RangeEndMs = end;
+        RangeSummaryText =
+            $"这一段 {count} 个音；实际弹到 {Music.TimeLabel(first)} ~ {Music.TimeLabel(last)}" +
+            $"（{(end is null ? "到曲尾" : "终点 " + Music.TimeLabel(end.Value))}）。" +
+            "时间显示仍按源文件时间轴，不会平移。";
+
+        RebuildPlan();
+    }
+
+    /// <summary>
+    /// 解析使用者手输的时间。格式由 <see cref="TimeInput"/> 统一定义，
+    /// 与 CLI 的 <c>--range</c> 是同一套，不在这里另写一份。
+    /// </summary>
+    private static bool TryParseUserTime(string raw, out double? ms) => TimeInput.TryParse(raw, out ms);
+
+    /// <summary>把毫秒写成 mm:ss.mmm，用于回填输入框。</summary>
+    private static string FormatUserTime(double ms) => TimeInput.Format(ms);
+
+    private void OnRangeFull(object? sender, RoutedEventArgs e)
+    {
+        RangeStartBox.Text = "";
+        RangeEndBox.Text = "";
+    }
+
+    private void OnRangeFirst30(object? sender, RoutedEventArgs e)
+    {
+        if (_session.Song is null) return;
+        RangeStartBox.Text = "";
+        RangeEndBox.Text = FormatUserTime(30_000);
+    }
+
+    private void OnRangeLast30(object? sender, RoutedEventArgs e)
+    {
+        if (_session.Song is null) return;
+        double total = _session.Song.DurationSeconds * 1000.0;
+        RangeStartBox.Text = FormatUserTime(Math.Max(0, total - 30_000));
+        RangeEndBox.Text = "";
+    }
+
+    private void OnRangePlus30(object? sender, RoutedEventArgs e)
+    {
+        if (_session.Song is null) return;
+        double total = _session.Song.DurationSeconds * 1000.0;
+        double baseMs = 0;
+        if (TryParseUserTime((RangeEndBox.Text ?? "").Trim(), out double? cur) && cur is { } c) baseMs = c;
+        else baseMs = total;
+        RangeEndBox.Text = FormatUserTime(Math.Min(total + 30_000, baseMs + 30_000));
+    }
+
+    private void OnRangeFromPosition(object? sender, RoutedEventArgs e)
+    {
+        if (_session.Song is null) return;
+        double pos = _engine?.PositionWallMs ?? 0;
+        RangeStartBox.Text = FormatUserTime(pos);
     }
 
     // ---------------------------------------------------------------- 编译
@@ -570,7 +702,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             RealInputBanner.IsVisible = true;
             PauseButton.IsEnabled = true;
             StopButton.IsEnabled = true;
-            StatusText = "REAL INPUT ACTIVE — 正在发送真实键鼠事件（F12 紧急停止）。";
+            StatusText = "REAL INPUT ACTIVE — 正在发送真实键鼠事件（F9 紧急停止）。";
             _session.Log.Info($"Real Input 播放开始：{plan.EventCount} 个事件，速度 {CurrentSpeed:0.##}x。");
         }
         catch (Exception ex)
@@ -642,6 +774,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         try { _windows?.ReleaseAll(); } catch (Exception ex) { _session.Log.Error("紧急停止释放后端失败", ex); }
         try { _trace?.ReleaseAll(); } catch { /* Trace 没有真实输入 */ }
 
+        // 注意：这里**不**释放全局热键。
+        // 热键要活到窗口关闭为止 —— 否则按一次 F9 之后它就没了，第二次按下去毫无反应，
+        // 而「紧急停止只能用一次」比没有紧急停止更危险。
+        // 真正的释放放在 DisposeEmergencyHotkey()，由 Closing / 关窗路径调用。
+
         _isRealInputActive = false;
         _countdownCancelled = true;
         _countdownToken++;
@@ -652,12 +789,90 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         StopButton.IsEnabled = false;
     }
 
+    /// <summary>
+    /// 建立系统级紧急停止热键（默认 F9）。
+    ///
+    /// 有了它，切到目标窗口之后 F9 仍然有效 —— 这一点很关键：窗口级的 KeyDown 只在
+    /// 本窗口是焦点时才有反应，而真实用法正是「倒计时里切走」，那时窗口级快捷键是聋的。
+    ///
+    /// 注册可能失败（组合键被别的程序占了），这时只降级、不报错：
+    /// 状态栏与提示文字会改成「仅窗口内有效」，让使用者知道真实情况。
+    /// </summary>
+    private void StartEmergencyHotkey()
+    {
+        try
+        {
+            _emergencyHotkey = new EmergencyHotkey(new WindowsGlobalHotkeyApi(), OnHotkeyTriggered);
+            _emergencyHotkey.Start();
+
+            if (_emergencyHotkey.IsActive)
+            {
+                _session.Log.Info($"全局紧急停止热键已注册：{_emergencyHotkey.Label}（系统级热键，非键盘钩子）");
+                EmergencyButton.Content = $"紧急停止（{_emergencyHotkey.Label}，全局有效）";
+                EmergencyHintText = $"按 {_emergencyHotkey.Label} 立即停止并释放全部输入 —— " +
+                                    "切到目标窗口后依然有效（系统级热键注册，不是键盘钩子）。";
+            }
+            else
+            {
+                _session.Log.Warn(
+                    $"全局紧急停止热键注册失败：{_emergencyHotkey.FailureReason}。" +
+                    "已降级为「仅本窗口为焦点时有效」。");
+                EmergencyButton.Content = "紧急停止（F9，仅本窗口）";
+                EmergencyHintText =
+                    $"全局热键注册失败（{_emergencyHotkey.FailureReason}），F9 现在只在" +
+                    "本窗口是焦点时有效。切到目标窗口后请用鼠标点本窗口的「紧急停止」按钮，或先切回来按 F9。";
+            }
+        }
+        catch (Exception ex)
+        {
+            // 热键只是保险，起不来也不能让程序启动不了。
+            _session.Log.Error("建立全局紧急停止热键时出错（已继续启动）", ex);
+            EmergencyHintText = "全局热键初始化失败，F9 仅在本窗口为焦点时有效。";
+        }
+    }
+
+    /// <summary>
+    /// 热键回调。它在**热键自己的后台线程**上被调用，而 <see cref="EmergencyStop"/>
+    /// 会碰 Avalonia 控件，所以必须切回 UI 线程。
+    /// </summary>
+    private void OnHotkeyTriggered()
+    {
+        try
+        {
+            if (Dispatcher.UIThread.CheckAccess()) EmergencyStop();
+            else Dispatcher.UIThread.Post(EmergencyStop, DispatcherPriority.Send);
+        }
+        catch { /* 关窗竞态：窗口已经没了，没什么可停的 */ }
+    }
+
+    private string _emergencyHintText = "按 F9 立即停止并释放全部输入。";
+
+    /// <summary>紧急停止的提示文字；会按全局热键是否注册成功改成实话。</summary>
+    public string EmergencyHintText { get => _emergencyHintText; set { _emergencyHintText = value; Raise(); } }
+
+    /// <summary>
+    /// 释放全局热键占用的系统组合键。只在关窗时调用一次 ——
+    /// 想停播放请用 <see cref="EmergencyStop"/>，它会保留热键以便反复使用。
+    /// </summary>
+    public void DisposeEmergencyHotkey()
+    {
+        try
+        {
+            _emergencyHotkey?.Dispose();
+            _emergencyHotkey = null;
+        }
+        catch (Exception ex)
+        {
+            _session.Log.Error("释放全局热键失败", ex);
+        }
+    }
+
     private void OnEmergencyStop(object? sender, RoutedEventArgs e) => EmergencyStop();
 
     private void OnKeyDown(object? sender, KeyEventArgs e)
     {
-        // F12 优先于普通 UI 操作：先处理并吞掉事件。
-        if (e.Key == Key.F12)
+        // F9 优先于普通 UI 操作：先处理并吞掉事件。
+        if (e.Key == Key.F9)
         {
             EmergencyStop();
             e.Handled = true;
